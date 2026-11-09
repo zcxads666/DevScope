@@ -23,48 +23,54 @@ enum LoginItem {
         return FileManager.default.fileExists(atPath: agentURL.path)
     }
 
-    static func setEnabled(_ enabled: Bool) {
+    static func setEnabled(_ enabled: Bool) throws {
         guard isBundleApp else { return }
 
         if enabled {
             do {
                 try SMAppService.mainApp.register()
-                removeLaunchAgent()   // 防止与回退方案双启动
-                return
             } catch {
                 // 注册失败 → 回退 LaunchAgent
+                try? SMAppService.mainApp.unregister()
+                try installLaunchAgent()
+                return
             }
-            try? SMAppService.mainApp.unregister()
-            installLaunchAgent()
+            try removeLaunchAgent()   // 防止与回退方案双启动
         } else {
-            removeLaunchAgent()
-            try? SMAppService.mainApp.unregister()
+            try removeLaunchAgent()
+            if SMAppService.mainApp.status != .notRegistered {
+                try SMAppService.mainApp.unregister()
+            }
         }
     }
 
     // MARK: LaunchAgent 回退（仅写 plist，登录时由 launchd 拉起；不立即加载以免双开）
 
-    private static func installLaunchAgent() {
+    private static func installLaunchAgent() throws {
         let binary = Bundle.main.bundlePath + "/Contents/MacOS/DevScope"
-        guard FileManager.default.isExecutableFile(atPath: binary) else { return }
-
-        let plist = """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        <plist version="1.0">
-        <dict>
-            <key>Label</key><string>\(agentLabel)</string>
-            <key>ProgramArguments</key>
-            <array><string>\(binary)</string></array>
-            <key>RunAtLoad</key><true/>
-            <key>ProcessType</key><string>Background</string>
-        </dict>
-        </plist>
-        """
-        try? plist.write(to: agentURL, atomically: true, encoding: .utf8)
+        guard FileManager.default.isExecutableFile(atPath: binary) else {
+            throw CocoaError(.fileReadNoSuchFile, userInfo: [NSFilePathErrorKey: binary])
+        }
+        try writeLaunchAgent(binary: binary, at: agentURL)
     }
 
-    private static func removeLaunchAgent() {
-        try? FileManager.default.removeItem(at: agentURL)
+    static func writeLaunchAgent(binary: String, at url: URL) throws {
+        let plist: [String: Any] = [
+            "Label": agentLabel,
+            "ProgramArguments": [binary],
+            "RunAtLoad": true,
+            "ProcessType": "Background",
+        ]
+        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: url, options: .atomic)
+    }
+
+    private static func removeLaunchAgent() throws {
+        do {
+            try FileManager.default.removeItem(at: agentURL)
+        } catch let error as CocoaError where error.code == .fileNoSuchFile {
+            // 未使用回退方案时无需删除。
+        }
     }
 }

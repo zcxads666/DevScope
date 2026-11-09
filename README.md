@@ -38,3 +38,14 @@ open build/DevScope.app # 启动，菜单栏出现 🗄 图标 + 服务数
 | `package.json` / `pyproject.toml` 依赖 | 精修技术栈名（Express / FastAPI …） |
 
 要求：macOS 13+，Xcode Command Line Tools。
+
+## 开发验证
+
+回归测试使用 Swift Testing，要求 Swift 6+，无需安装完整 Xcode：
+
+```bash
+./scripts/test.sh
+swift build -c release
+```
+
+覆盖进程参数解析、命令输出与超时回收、TCP 探测竞争，以及开机自启配置写入。测试仅在临时目录写入配置，不修改实际登录项。

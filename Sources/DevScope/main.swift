@@ -7,7 +7,12 @@ import ServiceManagement
 let arguments = CommandLine.arguments
 if let index = arguments.firstIndex(of: "--login"), arguments.count > index + 1 {
     let enable = arguments[index + 1].lowercased() != "off"
-    LoginItem.setEnabled(enable)
+    do {
+        try LoginItem.setEnabled(enable)
+    } catch {
+        FileHandle.standardError.write(Data("开机自启设置失败：\(error.localizedDescription)\n".utf8))
+        exit(1)
+    }
     print("开机自启: \(LoginItem.isEnabled ? "已开启 ✓" : "未开启")（SMAppService=\(SMAppService.mainApp.status == .enabled ? "on" : "off")，LaunchAgent=\(FileManager.default.fileExists(atPath: NSHomeDirectory() + "/Library/LaunchAgents/local.devscope.app.plist") ? "on" : "off")）")
     exit(0)
 }

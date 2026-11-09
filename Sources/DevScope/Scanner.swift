@@ -15,19 +15,29 @@ enum ProcUtil {
         var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
         var size: size_t = 0
         guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > 8 else { return [] }
-        var buf = [CChar](repeating: 0, count: size)
+        var buf = [UInt8](repeating: 0, count: size)
         guard sysctl(&mib, 3, &buf, &size, nil, 0) == 0 else { return [] }
-        let total = min(Int(size), buf.count)
-        let argc = buf.withUnsafeBytes { $0.load(as: Int32.self) }
+        return parseArguments(Array(buf.prefix(Int(size))))
+    }
+
+    /// KERN_PROCARGS2: argc、可执行路径、NUL 填充、argc 个参数，随后才是环境变量。
+    static func parseArguments(_ buffer: [UInt8]) -> [String] {
+        let headerSize = MemoryLayout<Int32>.size
+        guard buffer.count > headerSize else { return [] }
+        let argc = buffer.withUnsafeBytes { $0.loadUnaligned(as: Int32.self) }
+        guard argc > 0, Int(argc) <= buffer.count - headerSize else { return [] }
+        var i = headerSize
+        // 路径不属于 argv，不能计入 argc。
+        while i < buffer.count && buffer[i] != 0 { i += 1 }
+        while i < buffer.count && buffer[i] == 0 { i += 1 }
         var args: [String] = []
-        var i = 4
-        while args.count < Int(argc) && i < total {
-            while i < total && buf[i] == 0 { i += 1 }
-            guard i < total else { break }
+        for _ in 0..<Int(argc) {
+            guard i < buffer.count else { return [] }
             let start = i
-            while i < total && buf[i] != 0 { i += 1 }
-            let bytes = buf[start..<i].map { UInt8(bitPattern: $0) }
-            args.append(String(decoding: bytes, as: UTF8.self))
+            while i < buffer.count && buffer[i] != 0 { i += 1 }
+            guard i < buffer.count else { return [] }
+            args.append(String(decoding: buffer[start..<i], as: UTF8.self))
+            i += 1 // 后续的空参数必须保留。
         }
         return args
     }
@@ -68,60 +78,6 @@ enum ProcUtil {
         let r = proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &info, Int32(MemoryLayout<proc_taskinfo>.size))
         guard r > 0 else { return nil }
         return info.pti_resident_size
-    }
-}
-
-// MARK: - 子进程执行
-
-enum Shell {
-    struct Result {
-        let stdout: String?
-        let stderr: String?
-        let code: Int32
-        var success: Bool { code == 0 }
-    }
-
-    static func run(_ path: String, _ arguments: [String], timeout: TimeInterval) async -> String? {
-        let result = await runEx(path, arguments, timeout: timeout)
-        return result.success ? (result.stdout ?? "") : nil
-    }
-
-    @discardableResult
-    static func runEx(_ path: String, _ arguments: [String], timeout: TimeInterval) async -> Result {
-        await Task.detached(priority: .utility) { () -> Result in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: path)
-            process.arguments = arguments
-            let out = Pipe()
-            let err = Pipe()
-            process.standardOutput = out
-            process.standardError = err
-            do { try process.run() } catch { return Result(stdout: nil, stderr: nil, code: -1) }
-
-            var outData = Data()
-            var errData = Data()
-            let group = DispatchGroup()
-            group.enter()
-            DispatchQueue.global().async {
-                outData = out.fileHandleForReading.readDataToEndOfFile()
-                group.leave()
-            }
-            group.enter()
-            DispatchQueue.global().async {
-                errData = err.fileHandleForReading.readDataToEndOfFile()
-                group.leave()
-            }
-            if group.wait(timeout: .now() + timeout) == .timedOut {
-                process.terminate()
-                return Result(stdout: nil, stderr: nil, code: -1)
-            }
-            process.waitUntilExit()
-            return Result(
-                stdout: String(data: outData, encoding: .utf8),
-                stderr: String(data: errData, encoding: .utf8),
-                code: process.terminationStatus
-            )
-        }.value
     }
 }
 

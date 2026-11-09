@@ -4,6 +4,24 @@ import Network
 // MARK: - 健康检查
 
 enum HealthChecker {
+    /// NWConnection 状态回调与超时可能同时完成，只恢复一次 continuation。
+    private final class TCPCompletion: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Double?, Never>?
+
+        init(_ continuation: CheckedContinuation<Double?, Never>) {
+            self.continuation = continuation
+        }
+
+        func finish(_ value: Double?) {
+            lock.lock()
+            let pending = continuation
+            continuation = nil
+            lock.unlock()
+            pending?.resume(returning: value)
+        }
+    }
+
     static func probe(_ services: [ServiceInfo]) async -> [String: ProbeResult] {
         await withTaskGroup(of: (String, ProbeResult?).self) { group in
             for service in services {
@@ -57,31 +75,25 @@ enum HealthChecker {
                 port: endpointPort,
                 using: .tcp
             )
-            let lock = NSLock()
-            var finished = false
-            func finish(_ value: Double?) {
-                lock.lock()
-                let already = finished
-                finished = true
-                lock.unlock()
-                if !already { continuation.resume(returning: value) }
-            }
+            let completion = TCPCompletion(continuation)
             let start = Date()
             connection.stateUpdateHandler = { state in
                 switch state {
                 case .ready:
+                    completion.finish(Date().timeIntervalSince(start) * 1000)
                     connection.cancel()
-                    finish(Date().timeIntervalSince(start) * 1000)
                 case .failed:
-                    finish(nil)
+                    completion.finish(nil)
+                    connection.cancel()
                 case .cancelled:
-                    finish(nil)
+                    completion.finish(nil)
                 default:
                     break
                 }
             }
             connection.start(queue: DispatchQueue(label: "devscope.tcp"))
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                completion.finish(nil)
                 connection.cancel()
             }
         }

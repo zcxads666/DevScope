@@ -446,7 +446,13 @@ struct FooterView: View {
                     .controlSize(.mini)
                     .labelsHidden()
                     .onChange(of: launchAtLogin) { enabled in
-                        LoginItem.setEnabled(enabled)
+                        do {
+                            try LoginItem.setEnabled(enabled)
+                        } catch {
+                            let alert = NSAlert(error: error)
+                            alert.messageText = "无法设置开机自启"
+                            alert.runModal()
+                        }
                         launchAtLogin = LoginItem.isEnabled   // 同步真实状态
                     }
                     .disabled(!LoginItem.isBundleApp)

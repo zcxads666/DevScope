@@ -5,6 +5,7 @@ let package = Package(
     name: "DevScope",
     platforms: [.macOS(.v13)],
     targets: [
-        .executableTarget(name: "DevScope", path: "Sources/DevScope")
+        .executableTarget(name: "DevScope", path: "Sources/DevScope"),
+        .testTarget(name: "DevScopeTests", dependencies: ["DevScope"])
     ]
 )
